@@ -6,6 +6,7 @@ import {
 } from 'node:http';
 import type { Config } from './config.js';
 import { readBody, send } from './lib/http.js';
+import { type Logger, jsonLogger } from './lib/logger.js';
 import { deliver } from './webhooks/deliver.js';
 import type { SubscriptionStore } from './webhooks/store.js';
 import type { Fetcher, Subscription } from './webhooks/types.js';
@@ -14,6 +15,7 @@ export interface Deps {
   config: Config;
   subscriptions: SubscriptionStore;
   fetch?: Fetcher;
+  logger?: Logger;
 }
 
 interface Ctx {
@@ -94,7 +96,19 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: Deps): Pro
 }
 
 export function createApp(deps: Deps): Server {
+  const log = deps.logger ?? jsonLogger();
   return createServer((req, res) => {
+    const started = performance.now();
+    res.on('finish', () => {
+      log({
+        level: 'info',
+        msg: 'request',
+        method: req.method,
+        path: req.url,
+        status: res.statusCode,
+        ms: Math.round(performance.now() - started),
+      });
+    });
     route(req, res, deps).catch((err: unknown) => {
       console.error(err);
       send(res, 500, { error: 'internal error' });
