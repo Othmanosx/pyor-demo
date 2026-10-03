@@ -27,7 +27,9 @@ curl -X POST localhost:3000/events \
 | `GET` | `/endpoints` | List endpoints |
 | `POST` | `/endpoints` | Create one, returns the signing secret once |
 | `DELETE` | `/endpoints/:id` | Remove one |
-| `POST` | `/events` | Deliver an event to matching endpoints |
+| `POST` | `/events` | Deliver an event to matching endpoints, retrying failures |
+| `GET` | `/dead-letters` | List deliveries that ran out of attempts |
+| `POST` | `/dead-letters/:id/replay` | Send a dead delivery again |
 
 Delivery and signing details are in [docs/webhooks.md](docs/webhooks.md).
 

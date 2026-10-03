@@ -10,7 +10,7 @@ import type { DeadLetterStore } from './webhooks/deadLetters.js';
 import { createDelivery, deliver } from './webhooks/deliver.js';
 import type { EndpointStore } from './webhooks/endpoints.js';
 import type { Sleep } from './webhooks/retry.js';
-import type { Delivery, Endpoint, Fetcher } from './webhooks/types.js';
+import type { DeadLetter, Delivery, Endpoint, Fetcher } from './webhooks/types.js';
 
 export interface Deps {
   config: Config;
@@ -35,6 +35,15 @@ const deliveryView = ({ id, endpointId, status, attempts }: Delivery) => ({
   endpointId,
   status,
   attempts,
+});
+
+const deadLetterView = ({ id, endpointId, event, attempts, lastError, failedAt }: DeadLetter) => ({
+  id,
+  endpointId,
+  event,
+  attempts,
+  lastError,
+  failedAt,
 });
 
 function dispatch(endpoint: Endpoint, delivery: Delivery, deps: Deps): void {
@@ -92,11 +101,28 @@ async function postEvent({ req, res, deps }: Ctx): Promise<void> {
   send(res, 202, { deliveries: deliveries.map(deliveryView) });
 }
 
+function listDeadLetters({ res, deps }: Ctx): void {
+  send(res, 200, { deadLetters: deps.deadLetters.list().map(deadLetterView) });
+}
+
+function replayDeadLetter({ res, deps }: Ctx, [id = '']: string[]): void {
+  const letter = deps.deadLetters.get(id);
+  if (!letter) return send(res, 404, { error: 'dead letter not found' });
+  const endpoint = deps.endpoints.get(letter.endpointId);
+  if (!endpoint) return send(res, 409, { error: 'endpoint no longer exists' });
+  deps.deadLetters.remove(id);
+  const delivery = createDelivery(endpoint, letter.event, letter.payload);
+  dispatch(endpoint, delivery, deps);
+  send(res, 202, { delivery: deliveryView(delivery) });
+}
+
 const routes: [method: string, pattern: RegExp, handler: Handler][] = [
   ['GET', /^\/endpoints$/, listEndpoints],
   ['POST', /^\/endpoints$/, createEndpoint],
   ['DELETE', /^\/endpoints\/([\w-]+)$/, deleteEndpoint],
   ['POST', /^\/events$/, postEvent],
+  ['GET', /^\/dead-letters$/, listDeadLetters],
+  ['POST', /^\/dead-letters\/([\w-]+)\/replay$/, replayDeadLetter],
 ];
 
 async function route(req: IncomingMessage, res: ServerResponse, deps: Deps): Promise<void> {

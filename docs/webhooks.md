@@ -35,6 +35,12 @@ With the defaults the five attempts are spread over 7.5 seconds.
 
 The dead-letter store keeps the newest `DEAD_LETTER_LIMIT` entries in memory. When it is full, the oldest entry is dropped.
 
+## Dead letters
+
+`GET /dead-letters` lists deliveries that ran out of attempts, oldest first, with the last error and the time Relay gave up.
+
+`POST /dead-letters/:id/replay` sends one again as a new delivery with a fresh id and removes it from the list. If it fails again it comes back as a new dead letter. Replay answers `404` for an unknown id and `409` when the endpoint has been deleted, and in that case the dead letter stays.
+
 ## Configuration
 
 | Variable | Default | Meaning |

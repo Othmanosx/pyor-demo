@@ -84,3 +84,49 @@ describe('events', () => {
     expect((await call('/nope')).status).toBe(404);
   });
 });
+
+describe('dead letters', () => {
+  const failOnce = async () => {
+    receiver.mockResolvedValue(new Response(null, { status: 503 }));
+    const { id: endpointId } = await (
+      await post('/endpoints', { url: 'https://a.test/h', events: ['order.paid'] })
+    ).json();
+    await post('/events', { event: 'order.paid', payload: { id: 9 } });
+    await vi.waitFor(() => expect(deadLetters.list()).toHaveLength(1));
+    return { endpointId, letter: deadLetters.list()[0]! };
+  };
+
+  it('lists deliveries that ran out of attempts', async () => {
+    const { endpointId, letter } = await failOnce();
+    const { deadLetters: listed } = await (await call('/dead-letters')).json();
+    expect(listed).toEqual([
+      expect.objectContaining({ id: letter.id, endpointId, attempts: 3, event: 'order.paid' }),
+    ]);
+  });
+
+  it('replays a dead letter once the receiver is back', async () => {
+    const { letter } = await failOnce();
+    receiver.mockResolvedValue(new Response(null, { status: 200 }));
+
+    const res = await call(`/dead-letters/${letter.id}/replay`, { method: 'POST' });
+
+    expect(res.status).toBe(202);
+    expect(deadLetters.list()).toHaveLength(0);
+    await vi.waitFor(() => expect(receiver).toHaveBeenCalledTimes(4));
+    expect(JSON.parse(receiver.mock.calls[3]![1]!.body as string)).toEqual({ id: 9 });
+  });
+
+  it('answers 404 for an unknown dead letter', async () => {
+    expect((await call('/dead-letters/nope/replay', { method: 'POST' })).status).toBe(404);
+  });
+
+  it('answers 409 and keeps the dead letter when the endpoint is gone', async () => {
+    const { endpointId, letter } = await failOnce();
+    await call(`/endpoints/${endpointId}`, { method: 'DELETE' });
+
+    const res = await call(`/dead-letters/${letter.id}/replay`, { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    expect(deadLetters.get(letter.id)).toBeDefined();
+  });
+});
