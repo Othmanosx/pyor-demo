@@ -6,14 +6,18 @@ import {
 } from 'node:http';
 import type { Config } from './config.js';
 import { readBody, send } from './lib/http.js';
-import { deliver } from './webhooks/deliver.js';
+import type { DeadLetterStore } from './webhooks/deadLetters.js';
+import { createDelivery, deliver } from './webhooks/deliver.js';
 import type { EndpointStore } from './webhooks/endpoints.js';
-import type { Fetcher, Endpoint } from './webhooks/types.js';
+import type { Sleep } from './webhooks/retry.js';
+import type { Delivery, Endpoint, Fetcher } from './webhooks/types.js';
 
 export interface Deps {
   config: Config;
   endpoints: EndpointStore;
+  deadLetters: DeadLetterStore;
   fetch?: Fetcher;
+  sleep?: Sleep;
 }
 
 interface Ctx {
@@ -25,6 +29,27 @@ interface Ctx {
 type Handler = (ctx: Ctx, params: string[]) => Promise<void> | void;
 
 const publicView = ({ id, url, events }: Endpoint) => ({ id, url, events });
+
+const deliveryView = ({ id, endpointId, status, attempts }: Delivery) => ({
+  id,
+  endpointId,
+  status,
+  attempts,
+});
+
+function dispatch(endpoint: Endpoint, delivery: Delivery, deps: Deps): void {
+  const { config, deadLetters, fetch, sleep } = deps;
+  deliver(endpoint, delivery, {
+    fetch,
+    sleep,
+    timeoutMs: config.deliveryTimeoutMs,
+    retry: config.retry,
+  })
+    .then((done) => {
+      if (done.status === 'dead') deadLetters.add(done);
+    })
+    .catch(console.error);
+}
 
 function parseEndpoint(body: unknown): Pick<Endpoint, 'url' | 'events'> | string {
   if (typeof body !== 'object' || body === null) return 'body must be a JSON object';
@@ -59,21 +84,12 @@ async function postEvent({ req, res, deps }: Ctx): Promise<void> {
   if (typeof event !== 'string' || event === '') {
     return send(res, 400, { error: 'event must be a non-empty string' });
   }
-  const deliveries = await Promise.all(
-    deps.endpoints
-      .forEvent(event)
-      .map((endpoint) =>
-        deliver(endpoint, event, payload, { fetch: deps.fetch, timeoutMs: deps.config.deliveryTimeoutMs }),
-      ),
-  );
-  send(res, 202, {
-    deliveries: deliveries.map(({ id, endpointId, status, attempts }) => ({
-      id,
-      endpointId,
-      status,
-      attempts,
-    })),
+  const deliveries = deps.endpoints.forEvent(event).map((endpoint) => {
+    const delivery = createDelivery(endpoint, event, payload);
+    dispatch(endpoint, delivery, deps);
+    return delivery;
   });
+  send(res, 202, { deliveries: deliveries.map(deliveryView) });
 }
 
 const routes: [method: string, pattern: RegExp, handler: Handler][] = [

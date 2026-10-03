@@ -5,7 +5,7 @@ export interface Endpoint {
   secret: string;
 }
 
-export type DeliveryStatus = 'pending' | 'delivered' | 'failed';
+export type DeliveryStatus = 'pending' | 'delivered' | 'dead';
 
 export interface Delivery {
   id: string;
@@ -16,6 +16,17 @@ export interface Delivery {
   attempts: number;
   lastError?: string;
   createdAt: number;
+}
+
+export interface DeadLetter extends Delivery {
+  status: 'dead';
+  failedAt: number;
+}
+
+export interface AttemptResult {
+  ok: boolean;
+  status?: number;
+  error?: string;
 }
 
 export type Fetcher = typeof fetch;

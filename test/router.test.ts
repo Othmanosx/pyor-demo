@@ -1,11 +1,19 @@
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/router.js';
+import { DeadLetterStore } from '../src/webhooks/deadLetters.js';
 import { EndpointStore } from '../src/webhooks/endpoints.js';
 
-const config = { port: 0, deliveryTimeoutMs: 1000 };
+const config = {
+  port: 0,
+  deliveryTimeoutMs: 1000,
+  retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1 },
+  deadLetterLimit: 10,
+};
+const sleep = async () => {};
 const receiver = vi.fn<typeof fetch>();
 let app: ReturnType<typeof createApp>;
+let deadLetters: DeadLetterStore;
 let base: string;
 
 const call = (path: string, init?: RequestInit) => fetch(`${base}${path}`, init);
@@ -14,7 +22,8 @@ const post = (path: string, body: unknown) =>
 
 beforeEach(async () => {
   receiver.mockReset().mockResolvedValue(new Response(null, { status: 200 }));
-  app = createApp({ config, endpoints: new EndpointStore(), fetch: receiver });
+  deadLetters = new DeadLetterStore(config.deadLetterLimit);
+  app = createApp({ config, endpoints: new EndpointStore(), deadLetters, fetch: receiver, sleep });
   await new Promise<void>((resolve) => app.listen(0, resolve));
   base = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
 });
@@ -52,7 +61,19 @@ describe('events', () => {
     const { deliveries } = await res.json();
     expect(res.status).toBe(202);
     expect(deliveries).toHaveLength(2);
-    expect(receiver).toHaveBeenCalledTimes(2);
+    expect(deliveries[0]).toMatchObject({ status: 'pending', attempts: 0 });
+    await vi.waitFor(() => expect(receiver).toHaveBeenCalledTimes(2));
+  });
+
+  it('retries a failing receiver and dead-letters it after the last attempt', async () => {
+    receiver.mockResolvedValue(new Response(null, { status: 503 }));
+    await post('/endpoints', { url: 'https://a.test/h', events: ['order.paid'] });
+
+    await post('/events', { event: 'order.paid', payload: { id: 9 } });
+
+    await vi.waitFor(() => expect(deadLetters.list()).toHaveLength(1));
+    expect(receiver).toHaveBeenCalledTimes(3);
+    expect(deadLetters.list()[0]).toMatchObject({ attempts: 3, lastError: 'receiver responded 503' });
   });
 
   it('rejects an event without a name', async () => {
