@@ -1,0 +1,21 @@
+export interface Subscription {
+  id: string;
+  url: string;
+  events: string[];
+  secret: string;
+}
+
+export type DeliveryStatus = 'pending' | 'delivered' | 'failed';
+
+export interface Delivery {
+  id: string;
+  subscriptionId: string;
+  event: string;
+  payload: unknown;
+  status: DeliveryStatus;
+  attempts: number;
+  lastError?: string;
+  createdAt: number;
+}
+
+export type Fetcher = typeof fetch;
