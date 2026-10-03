@@ -31,6 +31,8 @@ A delivery is `delivered` when the receiver answers with a 2xx status within `DE
 
 A failed attempt is retried with exponential backoff: `RETRY_BASE_MS` after the first failure, double that after the second, and so on, capped at `RETRY_MAX_MS`. After `RETRY_MAX_ATTEMPTS` attempts the delivery is marked `dead` and moved to the dead-letter store.
 
+Every attempt is signed again with its own `x-relay-timestamp`, so receivers can keep rejecting old timestamps.
+
 With the defaults the five attempts are spread over 7.5 seconds.
 
 The dead-letter store keeps the newest `DEAD_LETTER_LIMIT` entries in memory. When it is full, the oldest entry is dropped.

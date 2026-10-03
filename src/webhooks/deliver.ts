@@ -8,6 +8,7 @@ export interface DeliverOptions {
   timeoutMs: number;
   retry: RetryPolicy;
   sleep?: Sleep;
+  now?: () => number;
 }
 
 function buildHeaders(
@@ -68,8 +69,9 @@ export async function deliver(
   opts: DeliverOptions,
 ): Promise<Delivery> {
   const body = JSON.stringify(delivery.payload);
+  const now = opts.now ?? Date.now;
   const { result, attempts } = await withRetry(
-    () => attempt(endpoint, delivery.event, body, delivery.createdAt, opts),
+    () => attempt(endpoint, delivery.event, body, now(), opts),
     opts.retry,
     opts.sleep,
   );

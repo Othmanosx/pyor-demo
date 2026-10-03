@@ -19,12 +19,13 @@ const respond = (...statuses: number[]) => {
   return fetch;
 };
 
-const run = (fetch: typeof globalThis.fetch, payload: unknown = {}) =>
-  deliver(endpoint, createDelivery(endpoint, 'order.paid', payload, () => 1000), {
+const run = (fetch: typeof globalThis.fetch, payload: unknown = {}, now = () => 1000) =>
+  deliver(endpoint, createDelivery(endpoint, 'order.paid', payload, now), {
     fetch,
     timeoutMs: 1000,
     retry,
     sleep,
+    now,
   });
 
 describe('deliver', () => {
@@ -43,6 +44,17 @@ describe('deliver', () => {
     const fetch = respond(503, 200);
     expect(await run(fetch)).toMatchObject({ status: 'delivered', attempts: 2 });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('signs every attempt with its own timestamp', async () => {
+    const ticks = [0, 1000, 2000];
+    const fetch = respond(503, 200);
+    await run(fetch, {}, () => ticks.shift() ?? 3000);
+
+    const stamps = fetch.mock.calls.map(
+      ([, init]) => (init?.headers as Record<string, string>)['x-relay-timestamp'],
+    );
+    expect(stamps).toEqual(['1000', '2000']);
   });
 
   it('marks the delivery dead once attempts run out', async () => {
