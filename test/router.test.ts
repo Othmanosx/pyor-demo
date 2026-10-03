@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/router.js';
-import { SubscriptionStore } from '../src/webhooks/store.js';
+import { EndpointStore } from '../src/webhooks/endpoints.js';
 
 const config = { port: 0, deliveryTimeoutMs: 1000 };
 const receiver = vi.fn<typeof fetch>();
@@ -14,39 +14,39 @@ const post = (path: string, body: unknown) =>
 
 beforeEach(async () => {
   receiver.mockReset().mockResolvedValue(new Response(null, { status: 200 }));
-  app = createApp({ config, subscriptions: new SubscriptionStore(), fetch: receiver });
+  app = createApp({ config, endpoints: new EndpointStore(), fetch: receiver });
   await new Promise<void>((resolve) => app.listen(0, resolve));
   base = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
 });
 
 afterEach(() => new Promise<void>((resolve) => app.close(() => resolve())));
 
-describe('subscriptions', () => {
+describe('endpoints', () => {
   it('creates one and reveals the secret only once', async () => {
-    const created = await (await post('/subscriptions', { url: 'https://a.test/h', events: ['x'] })).json();
+    const created = await (await post('/endpoints', { url: 'https://a.test/h', events: ['x'] })).json();
     expect(created.secret).toMatch(/^whsec_/);
 
-    const listed = await (await call('/subscriptions')).json();
-    expect(listed.subscriptions).toEqual([{ id: created.id, url: 'https://a.test/h', events: ['x'] }]);
+    const listed = await (await call('/endpoints')).json();
+    expect(listed.endpoints).toEqual([{ id: created.id, url: 'https://a.test/h', events: ['x'] }]);
   });
 
   it('rejects an invalid body', async () => {
-    const res = await post('/subscriptions', { url: 'nope', events: [] });
+    const res = await post('/endpoints', { url: 'nope', events: [] });
     expect(res.status).toBe(400);
   });
 
-  it('deletes a subscription and 404s the second time', async () => {
-    const { id } = await (await post('/subscriptions', { url: 'https://a.test/h', events: ['x'] })).json();
-    expect((await call(`/subscriptions/${id}`, { method: 'DELETE' })).status).toBe(200);
-    expect((await call(`/subscriptions/${id}`, { method: 'DELETE' })).status).toBe(404);
+  it('deletes an endpoint and 404s the second time', async () => {
+    const { id } = await (await post('/endpoints', { url: 'https://a.test/h', events: ['x'] })).json();
+    expect((await call(`/endpoints/${id}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await call(`/endpoints/${id}`, { method: 'DELETE' })).status).toBe(404);
   });
 });
 
 describe('events', () => {
-  it('delivers to every matching subscription', async () => {
-    await post('/subscriptions', { url: 'https://a.test/h', events: ['order.paid'] });
-    await post('/subscriptions', { url: 'https://b.test/h', events: ['order.paid'] });
-    await post('/subscriptions', { url: 'https://c.test/h', events: ['order.refunded'] });
+  it('delivers to every matching endpoint', async () => {
+    await post('/endpoints', { url: 'https://a.test/h', events: ['order.paid'] });
+    await post('/endpoints', { url: 'https://b.test/h', events: ['order.paid'] });
+    await post('/endpoints', { url: 'https://c.test/h', events: ['order.refunded'] });
 
     const res = await post('/events', { event: 'order.paid', payload: { id: 1 } });
     const { deliveries } = await res.json();

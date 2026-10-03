@@ -1,11 +1,11 @@
 # Webhooks
 
-Relay delivers each event to every subscription that listens for it. A delivery is one signed `POST` to the subscription URL.
+Relay delivers each event to every endpoint that listens for it. A delivery is one signed `POST` to the endpoint URL.
 
-## Subscribing
+## Registering an endpoint
 
 ```http
-POST /subscriptions
+POST /endpoints
 { "url": "https://example.com/hooks/relay", "events": ["order.paid"] }
 ```
 

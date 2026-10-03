@@ -7,12 +7,12 @@ import {
 import type { Config } from './config.js';
 import { readBody, send } from './lib/http.js';
 import { deliver } from './webhooks/deliver.js';
-import type { SubscriptionStore } from './webhooks/store.js';
-import type { Fetcher, Subscription } from './webhooks/types.js';
+import type { EndpointStore } from './webhooks/endpoints.js';
+import type { Fetcher, Endpoint } from './webhooks/types.js';
 
 export interface Deps {
   config: Config;
-  subscriptions: SubscriptionStore;
+  endpoints: EndpointStore;
   fetch?: Fetcher;
 }
 
@@ -24,9 +24,9 @@ interface Ctx {
 
 type Handler = (ctx: Ctx, params: string[]) => Promise<void> | void;
 
-const publicView = ({ id, url, events }: Subscription) => ({ id, url, events });
+const publicView = ({ id, url, events }: Endpoint) => ({ id, url, events });
 
-function parseSubscription(body: unknown): Pick<Subscription, 'url' | 'events'> | string {
+function parseEndpoint(body: unknown): Pick<Endpoint, 'url' | 'events'> | string {
   if (typeof body !== 'object' || body === null) return 'body must be a JSON object';
   const { url, events } = body as { url?: unknown; events?: unknown };
   if (typeof url !== 'string' || !URL.canParse(url)) return 'url must be a valid URL';
@@ -37,20 +37,20 @@ function parseSubscription(body: unknown): Pick<Subscription, 'url' | 'events'> 
   return valid ? { url, events } : 'events must be a non-empty array of strings';
 }
 
-function listSubscriptions({ res, deps }: Ctx): void {
-  send(res, 200, { subscriptions: deps.subscriptions.list().map(publicView) });
+function listEndpoints({ res, deps }: Ctx): void {
+  send(res, 200, { endpoints: deps.endpoints.list().map(publicView) });
 }
 
-async function createSubscription({ req, res, deps }: Ctx): Promise<void> {
-  const input = parseSubscription(await readBody(req));
+async function createEndpoint({ req, res, deps }: Ctx): Promise<void> {
+  const input = parseEndpoint(await readBody(req));
   if (typeof input === 'string') return send(res, 400, { error: input });
-  const sub = deps.subscriptions.add(input);
-  send(res, 201, { ...publicView(sub), secret: sub.secret });
+  const endpoint = deps.endpoints.add(input);
+  send(res, 201, { ...publicView(endpoint), secret: endpoint.secret });
 }
 
-function deleteSubscription({ res, deps }: Ctx, [id = '']: string[]): void {
-  const removed = deps.subscriptions.remove(id);
-  send(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'subscription not found' });
+function deleteEndpoint({ res, deps }: Ctx, [id = '']: string[]): void {
+  const removed = deps.endpoints.remove(id);
+  send(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'endpoint not found' });
 }
 
 async function postEvent({ req, res, deps }: Ctx): Promise<void> {
@@ -60,16 +60,16 @@ async function postEvent({ req, res, deps }: Ctx): Promise<void> {
     return send(res, 400, { error: 'event must be a non-empty string' });
   }
   const deliveries = await Promise.all(
-    deps.subscriptions
+    deps.endpoints
       .forEvent(event)
-      .map((sub) =>
-        deliver(sub, event, payload, { fetch: deps.fetch, timeoutMs: deps.config.deliveryTimeoutMs }),
+      .map((endpoint) =>
+        deliver(endpoint, event, payload, { fetch: deps.fetch, timeoutMs: deps.config.deliveryTimeoutMs }),
       ),
   );
   send(res, 202, {
-    deliveries: deliveries.map(({ id, subscriptionId, status, attempts }) => ({
+    deliveries: deliveries.map(({ id, endpointId, status, attempts }) => ({
       id,
-      subscriptionId,
+      endpointId,
       status,
       attempts,
     })),
@@ -77,9 +77,9 @@ async function postEvent({ req, res, deps }: Ctx): Promise<void> {
 }
 
 const routes: [method: string, pattern: RegExp, handler: Handler][] = [
-  ['GET', /^\/subscriptions$/, listSubscriptions],
-  ['POST', /^\/subscriptions$/, createSubscription],
-  ['DELETE', /^\/subscriptions\/([\w-]+)$/, deleteSubscription],
+  ['GET', /^\/endpoints$/, listEndpoints],
+  ['POST', /^\/endpoints$/, createEndpoint],
+  ['DELETE', /^\/endpoints\/([\w-]+)$/, deleteEndpoint],
   ['POST', /^\/events$/, postEvent],
 ];
 

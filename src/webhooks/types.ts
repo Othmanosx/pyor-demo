@@ -1,4 +1,4 @@
-export interface Subscription {
+export interface Endpoint {
   id: string;
   url: string;
   events: string[];
@@ -9,7 +9,7 @@ export type DeliveryStatus = 'pending' | 'delivered' | 'failed';
 
 export interface Delivery {
   id: string;
-  subscriptionId: string;
+  endpointId: string;
   event: string;
   payload: unknown;
   status: DeliveryStatus;

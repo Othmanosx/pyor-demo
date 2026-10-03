@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sign } from './sign.js';
-import type { Delivery, Fetcher, Subscription } from './types.js';
+import type { Delivery, Fetcher, Endpoint } from './types.js';
 
 export interface DeliverOptions {
   fetch?: Fetcher;
@@ -15,7 +15,7 @@ interface AttemptResult {
 }
 
 function buildHeaders(
-  sub: Subscription,
+  endpoint: Endpoint,
   event: string,
   body: string,
   timestamp: number,
@@ -24,12 +24,12 @@ function buildHeaders(
     'content-type': 'application/json',
     'x-relay-event': event,
     'x-relay-timestamp': String(timestamp),
-    'x-relay-signature': sign(sub.secret, body, timestamp),
+    'x-relay-signature': sign(endpoint.secret, body, timestamp),
   };
 }
 
 async function attempt(
-  sub: Subscription,
+  endpoint: Endpoint,
   event: string,
   body: string,
   timestamp: number,
@@ -37,9 +37,9 @@ async function attempt(
 ): Promise<AttemptResult> {
   const doFetch = opts.fetch ?? fetch;
   try {
-    const res = await doFetch(sub.url, {
+    const res = await doFetch(endpoint.url, {
       method: 'POST',
-      headers: buildHeaders(sub, event, body, timestamp),
+      headers: buildHeaders(endpoint, event, body, timestamp),
       body,
       signal: AbortSignal.timeout(opts.timeoutMs),
     });
@@ -50,7 +50,7 @@ async function attempt(
 }
 
 export async function deliver(
-  sub: Subscription,
+  endpoint: Endpoint,
   event: string,
   payload: unknown,
   opts: DeliverOptions,
@@ -59,7 +59,7 @@ export async function deliver(
   const timestamp = now();
   const delivery: Delivery = {
     id: randomUUID(),
-    subscriptionId: sub.id,
+    endpointId: endpoint.id,
     event,
     payload,
     status: 'pending',
@@ -67,7 +67,7 @@ export async function deliver(
     createdAt: timestamp,
   };
 
-  const result = await attempt(sub, event, JSON.stringify(payload), timestamp, opts);
+  const result = await attempt(endpoint, event, JSON.stringify(payload), timestamp, opts);
   delivery.attempts = 1;
   delivery.status = result.ok ? 'delivered' : 'failed';
   if (!result.ok) {
