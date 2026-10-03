@@ -1,9 +1,14 @@
 import { loadConfig } from './config.js';
 import { createApp } from './router.js';
-import { SubscriptionStore } from './webhooks/store.js';
+import { DeadLetterStore } from './webhooks/deadLetters.js';
+import { EndpointStore } from './webhooks/endpoints.js';
 
 const config = loadConfig();
-const app = createApp({ config, subscriptions: new SubscriptionStore() });
+const app = createApp({
+  config,
+  endpoints: new EndpointStore(),
+  deadLetters: new DeadLetterStore(config.deadLetterLimit),
+});
 
 app.listen(config.port, () => {
   console.log(`relay listening on :${config.port}`);
