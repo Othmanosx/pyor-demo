@@ -14,3 +14,7 @@ export function verify(
   const actual = Buffer.from(signature);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
+
+export function isFresh(timestamp: number, now: number, toleranceMs: number): boolean {
+  return Math.abs(now - timestamp) < toleranceMs;
+}
