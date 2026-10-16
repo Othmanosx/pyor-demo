@@ -5,7 +5,7 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { Config } from './config.js';
-import { readBody, send } from './lib/http.js';
+import { BodyTooLarge, readBody, send } from './lib/http.js';
 import { deliver } from './webhooks/deliver.js';
 import type { SubscriptionStore } from './webhooks/store.js';
 import type { Fetcher, Subscription } from './webhooks/types.js';
@@ -96,6 +96,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: Deps): Pro
 export function createApp(deps: Deps): Server {
   return createServer((req, res) => {
     route(req, res, deps).catch((err: unknown) => {
+      if (err instanceof BodyTooLarge) return send(res, 413, { error: 'body too large' });
       console.error(err);
       send(res, 500, { error: 'internal error' });
     });
