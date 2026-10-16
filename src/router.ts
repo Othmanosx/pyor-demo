@@ -22,6 +22,8 @@ interface Ctx {
   deps: Deps;
 }
 
+const MAX_EVENT_NAME = 128;
+
 type Handler = (ctx: Ctx, params: string[]) => Promise<void> | void;
 
 const publicView = ({ id, url, events }: Subscription) => ({ id, url, events });
@@ -58,6 +60,9 @@ async function postEvent({ req, res, deps }: Ctx): Promise<void> {
   const { event, payload } = (body ?? {}) as { event?: unknown; payload?: unknown };
   if (typeof event !== 'string' || event === '') {
     return send(res, 400, { error: 'event must be a non-empty string' });
+  }
+  if (event.length > MAX_EVENT_NAME) {
+    return send(res, 400, { error: `event must be at most ${MAX_EVENT_NAME} characters` });
   }
   const deliveries = await Promise.all(
     deps.subscriptions

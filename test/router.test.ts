@@ -63,3 +63,11 @@ describe('events', () => {
     expect((await call('/nope')).status).toBe(404);
   });
 });
+
+describe('events', () => {
+  it('rejects an event name over 128 characters', async () => {
+    const res = await post('/events', { event: 'x'.repeat(129), payload: {} });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/at most 128/);
+  });
+});
