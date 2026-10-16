@@ -24,6 +24,8 @@ interface Ctx {
 
 type Handler = (ctx: Ctx, params: string[]) => Promise<void> | void;
 
+const startedAt = Date.now();
+
 const publicView = ({ id, url, events }: Subscription) => ({ id, url, events });
 
 function parseSubscription(body: unknown): Pick<Subscription, 'url' | 'events'> | string {
@@ -35,6 +37,10 @@ function parseSubscription(body: unknown): Pick<Subscription, 'url' | 'events'> 
     events.length > 0 &&
     events.every((e): e is string => typeof e === 'string');
   return valid ? { url, events } : 'events must be a non-empty array of strings';
+}
+
+function health({ res }: Ctx): void {
+  send(res, 200, { ok: true, uptimeMs: Date.now() - startedAt });
 }
 
 function listSubscriptions({ res, deps }: Ctx): void {
@@ -77,6 +83,7 @@ async function postEvent({ req, res, deps }: Ctx): Promise<void> {
 }
 
 const routes: [method: string, pattern: RegExp, handler: Handler][] = [
+  ['GET', /^\/health$/, health],
   ['GET', /^\/subscriptions$/, listSubscriptions],
   ['POST', /^\/subscriptions$/, createSubscription],
   ['DELETE', /^\/subscriptions\/([\w-]+)$/, deleteSubscription],
