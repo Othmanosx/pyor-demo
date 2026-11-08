@@ -21,6 +21,16 @@ beforeEach(async () => {
 
 afterEach(() => new Promise<void>((resolve) => app.close(() => resolve())));
 
+describe('health', () => {
+  it('answers ok with the uptime', async () => {
+    const res = await call('/health');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.uptimeMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
 describe('subscriptions', () => {
   it('creates one and reveals the secret only once', async () => {
     const created = await (await post('/subscriptions', { url: 'https://a.test/h', events: ['x'] })).json();
