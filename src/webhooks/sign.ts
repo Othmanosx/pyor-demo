@@ -16,5 +16,5 @@ export function verify(
 }
 
 export function isFresh(timestamp: number, now: number, toleranceMs: number): boolean {
-  return Math.abs(now - timestamp) < toleranceMs;
+  return Math.abs(now - timestamp) <= toleranceMs;
 }
