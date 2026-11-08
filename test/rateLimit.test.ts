@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { createRateLimiter } from '../src/webhooks/rateLimit.js';
 
 describe('createRateLimiter', () => {
-  it('allows ten deliveries a second per endpoint', () => {
+  it('allows ten deliveries a second plus a burst of five', () => {
     const limiter = createRateLimiter();
-    const results = Array.from({ length: 11 }, () => limiter.take('ep_1', 0));
-    expect(results.filter(Boolean)).toHaveLength(10);
+    const results = Array.from({ length: 16 }, () => limiter.take('ep_1', 0));
+    expect(results.filter(Boolean)).toHaveLength(15);
   });
 
   it('opens a new window after a second', () => {
     const limiter = createRateLimiter();
-    Array.from({ length: 10 }, () => limiter.take('ep_1', 0));
+    Array.from({ length: 15 }, () => limiter.take('ep_1', 0));
     expect(limiter.take('ep_1', 1000)).toBe(true);
   });
 
