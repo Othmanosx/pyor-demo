@@ -21,6 +21,25 @@ The response includes a `secret`. It is shown once, so store it on your side.
 
 Reject requests whose signature does not match, and requests with an old timestamp.
 
+## Request body
+
+The body is the `payload` you posted to `POST /events`, serialized as JSON, unchanged. Read it as raw text before parsing: the signature covers the exact bytes.
+
+## Verifying a delivery
+
+```ts
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+export function verify(secret: string, body: string, timestamp: string, signature: string): boolean {
+  const expected = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+```
+
+Compare with `timingSafeEqual`, not `===`, so the check takes the same time whatever the input.
+
 ## Delivery
 
 A delivery is `delivered` when the receiver answers with a 2xx status within `DELIVERY_TIMEOUT_MS`. Anything else marks the delivery `failed`. Failed deliveries are not retried.
