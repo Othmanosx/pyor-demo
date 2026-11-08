@@ -31,3 +31,7 @@ CI runs the same three as separate jobs.
 ## Reporting a bug
 
 Open an issue with the request you sent, the response you got, and the response you expected. For a missed delivery, include the delivery `id` from the `POST /events` response.
+
+## Review rules
+
+The rules reviewers check are in `CLAUDE.md`, with the delivery-specific ones in `.claude/rules/webhooks.md`. Coding agents read the same files, so a rule written there is followed by people and agents alike.
