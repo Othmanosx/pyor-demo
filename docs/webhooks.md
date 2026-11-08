@@ -1,11 +1,11 @@
 # Webhooks
 
-Relay delivers each event to every subscription that listens for it. A delivery is one signed `POST` to the subscription URL.
+Relay delivers each event to every endpoint that listens for it. A delivery is one signed `POST` to the endpoint URL.
 
-## Subscribing
+## Registering an endpoint
 
 ```http
-POST /subscriptions
+POST /endpoints
 { "url": "https://example.com/hooks/relay", "events": ["order.paid"] }
 ```
 
@@ -23,11 +23,33 @@ Reject requests whose signature does not match, and requests with an old timesta
 
 ## Delivery
 
-A delivery is `delivered` when the receiver answers with a 2xx status within `DELIVERY_TIMEOUT_MS`. Anything else marks the delivery `failed`. Failed deliveries are not retried.
+`POST /events` answers `202` right away with each delivery as `pending`. Relay then sends the request in the background.
+
+A delivery is `delivered` when the receiver answers with a 2xx status within `DELIVERY_TIMEOUT_MS`. Anything else counts as a failed attempt.
+
+## Retries
+
+A failed attempt is retried with exponential backoff: `RETRY_BASE_MS` after the first failure, double that after the second, and so on, capped at `RETRY_MAX_MS`. After `RETRY_MAX_ATTEMPTS` attempts the delivery is marked `dead` and moved to the dead-letter store.
+
+Every attempt is signed again with its own `x-relay-timestamp`, so receivers can keep rejecting old timestamps.
+
+With the defaults the five attempts are spread over 7.5 seconds.
+
+The dead-letter store keeps the newest `DEAD_LETTER_LIMIT` entries in memory. When it is full, the oldest entry is dropped.
+
+## Dead letters
+
+`GET /dead-letters` lists deliveries that ran out of attempts, oldest first, with the last error and the time Relay gave up.
+
+`POST /dead-letters/:id/replay` sends one again as a new delivery with a fresh id and removes it from the list. If it fails again it comes back as a new dead letter. Replay answers `404` for an unknown id and `409` when the endpoint has been deleted, and in that case the dead letter stays.
 
 ## Configuration
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `PORT` | `3000` | Port the server listens on |
-| `DELIVERY_TIMEOUT_MS` | `5000` | Time to wait for the receiver |
+| `DELIVERY_TIMEOUT_MS` | `5000` | Time to wait for the receiver per attempt |
+| `RETRY_MAX_ATTEMPTS` | `5` | Attempts before a delivery is dead |
+| `RETRY_BASE_MS` | `500` | Delay after the first failed attempt |
+| `RETRY_MAX_MS` | `30000` | Upper bound for any single delay |
+| `DEAD_LETTER_LIMIT` | `1000` | Dead deliveries kept in memory |

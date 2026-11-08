@@ -1,11 +1,19 @@
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/router.js';
-import { SubscriptionStore } from '../src/webhooks/store.js';
+import { DeadLetterStore } from '../src/webhooks/deadLetters.js';
+import { EndpointStore } from '../src/webhooks/endpoints.js';
 
-const config = { port: 0, deliveryTimeoutMs: 1000 };
+const config = {
+  port: 0,
+  deliveryTimeoutMs: 1000,
+  retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1 },
+  deadLetterLimit: 10,
+};
+const sleep = async () => {};
 const receiver = vi.fn<typeof fetch>();
 let app: ReturnType<typeof createApp>;
+let deadLetters: DeadLetterStore;
 let base: string;
 
 const call = (path: string, init?: RequestInit) => fetch(`${base}${path}`, init);
@@ -14,45 +22,58 @@ const post = (path: string, body: unknown) =>
 
 beforeEach(async () => {
   receiver.mockReset().mockResolvedValue(new Response(null, { status: 200 }));
-  app = createApp({ config, subscriptions: new SubscriptionStore(), fetch: receiver });
+  deadLetters = new DeadLetterStore(config.deadLetterLimit);
+  app = createApp({ config, endpoints: new EndpointStore(), deadLetters, fetch: receiver, sleep });
   await new Promise<void>((resolve) => app.listen(0, resolve));
   base = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
 });
 
 afterEach(() => new Promise<void>((resolve) => app.close(() => resolve())));
 
-describe('subscriptions', () => {
+describe('endpoints', () => {
   it('creates one and reveals the secret only once', async () => {
-    const created = await (await post('/subscriptions', { url: 'https://a.test/h', events: ['x'] })).json();
+    const created = await (await post('/endpoints', { url: 'https://a.test/h', events: ['x'] })).json();
     expect(created.secret).toMatch(/^whsec_/);
 
-    const listed = await (await call('/subscriptions')).json();
-    expect(listed.subscriptions).toEqual([{ id: created.id, url: 'https://a.test/h', events: ['x'] }]);
+    const listed = await (await call('/endpoints')).json();
+    expect(listed.endpoints).toEqual([{ id: created.id, url: 'https://a.test/h', events: ['x'] }]);
   });
 
   it('rejects an invalid body', async () => {
-    const res = await post('/subscriptions', { url: 'nope', events: [] });
+    const res = await post('/endpoints', { url: 'nope', events: [] });
     expect(res.status).toBe(400);
   });
 
-  it('deletes a subscription and 404s the second time', async () => {
-    const { id } = await (await post('/subscriptions', { url: 'https://a.test/h', events: ['x'] })).json();
-    expect((await call(`/subscriptions/${id}`, { method: 'DELETE' })).status).toBe(200);
-    expect((await call(`/subscriptions/${id}`, { method: 'DELETE' })).status).toBe(404);
+  it('deletes an endpoint and 404s the second time', async () => {
+    const { id } = await (await post('/endpoints', { url: 'https://a.test/h', events: ['x'] })).json();
+    expect((await call(`/endpoints/${id}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await call(`/endpoints/${id}`, { method: 'DELETE' })).status).toBe(404);
   });
 });
 
 describe('events', () => {
-  it('delivers to every matching subscription', async () => {
-    await post('/subscriptions', { url: 'https://a.test/h', events: ['order.paid'] });
-    await post('/subscriptions', { url: 'https://b.test/h', events: ['order.paid'] });
-    await post('/subscriptions', { url: 'https://c.test/h', events: ['order.refunded'] });
+  it('delivers to every matching endpoint', async () => {
+    await post('/endpoints', { url: 'https://a.test/h', events: ['order.paid'] });
+    await post('/endpoints', { url: 'https://b.test/h', events: ['order.paid'] });
+    await post('/endpoints', { url: 'https://c.test/h', events: ['order.refunded'] });
 
     const res = await post('/events', { event: 'order.paid', payload: { id: 1 } });
     const { deliveries } = await res.json();
     expect(res.status).toBe(202);
     expect(deliveries).toHaveLength(2);
-    expect(receiver).toHaveBeenCalledTimes(2);
+    expect(deliveries[0]).toMatchObject({ status: 'pending', attempts: 0 });
+    await vi.waitFor(() => expect(receiver).toHaveBeenCalledTimes(2));
+  });
+
+  it('retries a failing receiver and dead-letters it after the last attempt', async () => {
+    receiver.mockResolvedValue(new Response(null, { status: 503 }));
+    await post('/endpoints', { url: 'https://a.test/h', events: ['order.paid'] });
+
+    await post('/events', { event: 'order.paid', payload: { id: 9 } });
+
+    await vi.waitFor(() => expect(deadLetters.list()).toHaveLength(1));
+    expect(receiver).toHaveBeenCalledTimes(3);
+    expect(deadLetters.list()[0]).toMatchObject({ attempts: 3, lastError: 'receiver responded 503' });
   });
 
   it('rejects an event without a name', async () => {
@@ -61,5 +82,51 @@ describe('events', () => {
 
   it('answers 404 for unknown routes', async () => {
     expect((await call('/nope')).status).toBe(404);
+  });
+});
+
+describe('dead letters', () => {
+  const failOnce = async () => {
+    receiver.mockResolvedValue(new Response(null, { status: 503 }));
+    const { id: endpointId } = await (
+      await post('/endpoints', { url: 'https://a.test/h', events: ['order.paid'] })
+    ).json();
+    await post('/events', { event: 'order.paid', payload: { id: 9 } });
+    await vi.waitFor(() => expect(deadLetters.list()).toHaveLength(1));
+    return { endpointId, letter: deadLetters.list()[0]! };
+  };
+
+  it('lists deliveries that ran out of attempts', async () => {
+    const { endpointId, letter } = await failOnce();
+    const { deadLetters: listed } = await (await call('/dead-letters')).json();
+    expect(listed).toEqual([
+      expect.objectContaining({ id: letter.id, endpointId, attempts: 3, event: 'order.paid' }),
+    ]);
+  });
+
+  it('replays a dead letter once the receiver is back', async () => {
+    const { letter } = await failOnce();
+    receiver.mockResolvedValue(new Response(null, { status: 200 }));
+
+    const res = await call(`/dead-letters/${letter.id}/replay`, { method: 'POST' });
+
+    expect(res.status).toBe(202);
+    expect(deadLetters.list()).toHaveLength(0);
+    await vi.waitFor(() => expect(receiver).toHaveBeenCalledTimes(4));
+    expect(JSON.parse(receiver.mock.calls[3]![1]!.body as string)).toEqual({ id: 9 });
+  });
+
+  it('answers 404 for an unknown dead letter', async () => {
+    expect((await call('/dead-letters/nope/replay', { method: 'POST' })).status).toBe(404);
+  });
+
+  it('answers 409 and keeps the dead letter when the endpoint is gone', async () => {
+    const { endpointId, letter } = await failOnce();
+    await call(`/endpoints/${endpointId}`, { method: 'DELETE' });
+
+    const res = await call(`/dead-letters/${letter.id}/replay`, { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    expect(deadLetters.get(letter.id)).toBeDefined();
   });
 });

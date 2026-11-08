@@ -1,6 +1,6 @@
 # pyor-demo
 
-A small webhook relay in TypeScript. Register a subscription, post an event, and Relay sends a signed `POST` to every subscriber.
+A small webhook relay in TypeScript. Register an endpoint, post an event, and Relay sends a signed `POST` to every endpoint that listens for it.
 
 This repository is a sandbox used to show [Pyor](https://pyor.review) reviewing a realistic pull request. The code is small on purpose.
 
@@ -13,7 +13,7 @@ npm start
 ```
 
 ```sh
-curl -X POST localhost:3000/subscriptions \
+curl -X POST localhost:3000/endpoints \
   -d '{"url":"https://example.com/hook","events":["order.paid"]}'
 
 curl -X POST localhost:3000/events \
@@ -24,10 +24,12 @@ curl -X POST localhost:3000/events \
 
 | Method | Path | Does |
 | --- | --- | --- |
-| `GET` | `/subscriptions` | List subscriptions |
-| `POST` | `/subscriptions` | Create one, returns the signing secret once |
-| `DELETE` | `/subscriptions/:id` | Remove one |
-| `POST` | `/events` | Deliver an event to matching subscriptions |
+| `GET` | `/endpoints` | List endpoints |
+| `POST` | `/endpoints` | Create one, returns the signing secret once |
+| `DELETE` | `/endpoints/:id` | Remove one |
+| `POST` | `/events` | Deliver an event to matching endpoints, retrying failures |
+| `GET` | `/dead-letters` | List deliveries that ran out of attempts |
+| `POST` | `/dead-letters/:id/replay` | Send a dead delivery again |
 
 Delivery and signing details are in [docs/webhooks.md](docs/webhooks.md).
 

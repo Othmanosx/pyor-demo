@@ -6,14 +6,18 @@ import {
 } from 'node:http';
 import type { Config } from './config.js';
 import { readBody, send } from './lib/http.js';
-import { deliver } from './webhooks/deliver.js';
-import type { SubscriptionStore } from './webhooks/store.js';
-import type { Fetcher, Subscription } from './webhooks/types.js';
+import type { DeadLetterStore } from './webhooks/deadLetters.js';
+import { createDelivery, deliver } from './webhooks/deliver.js';
+import type { EndpointStore } from './webhooks/endpoints.js';
+import type { Sleep } from './webhooks/retry.js';
+import type { DeadLetter, Delivery, Endpoint, Fetcher } from './webhooks/types.js';
 
 export interface Deps {
   config: Config;
-  subscriptions: SubscriptionStore;
+  endpoints: EndpointStore;
+  deadLetters: DeadLetterStore;
   fetch?: Fetcher;
+  sleep?: Sleep;
 }
 
 interface Ctx {
@@ -24,9 +28,39 @@ interface Ctx {
 
 type Handler = (ctx: Ctx, params: string[]) => Promise<void> | void;
 
-const publicView = ({ id, url, events }: Subscription) => ({ id, url, events });
+const publicView = ({ id, url, events }: Endpoint) => ({ id, url, events });
 
-function parseSubscription(body: unknown): Pick<Subscription, 'url' | 'events'> | string {
+const deliveryView = ({ id, endpointId, status, attempts }: Delivery) => ({
+  id,
+  endpointId,
+  status,
+  attempts,
+});
+
+const deadLetterView = ({ id, endpointId, event, attempts, lastError, failedAt }: DeadLetter) => ({
+  id,
+  endpointId,
+  event,
+  attempts,
+  lastError,
+  failedAt,
+});
+
+function dispatch(endpoint: Endpoint, delivery: Delivery, deps: Deps): void {
+  const { config, deadLetters, fetch, sleep } = deps;
+  deliver(endpoint, delivery, {
+    fetch,
+    sleep,
+    timeoutMs: config.deliveryTimeoutMs,
+    retry: config.retry,
+  })
+    .then((done) => {
+      if (done.status === 'dead') deadLetters.add(done);
+    })
+    .catch(console.error);
+}
+
+function parseEndpoint(body: unknown): Pick<Endpoint, 'url' | 'events'> | string {
   if (typeof body !== 'object' || body === null) return 'body must be a JSON object';
   const { url, events } = body as { url?: unknown; events?: unknown };
   if (typeof url !== 'string' || !URL.canParse(url)) return 'url must be a valid URL';
@@ -37,20 +71,20 @@ function parseSubscription(body: unknown): Pick<Subscription, 'url' | 'events'> 
   return valid ? { url, events } : 'events must be a non-empty array of strings';
 }
 
-function listSubscriptions({ res, deps }: Ctx): void {
-  send(res, 200, { subscriptions: deps.subscriptions.list().map(publicView) });
+function listEndpoints({ res, deps }: Ctx): void {
+  send(res, 200, { endpoints: deps.endpoints.list().map(publicView) });
 }
 
-async function createSubscription({ req, res, deps }: Ctx): Promise<void> {
-  const input = parseSubscription(await readBody(req));
+async function createEndpoint({ req, res, deps }: Ctx): Promise<void> {
+  const input = parseEndpoint(await readBody(req));
   if (typeof input === 'string') return send(res, 400, { error: input });
-  const sub = deps.subscriptions.add(input);
-  send(res, 201, { ...publicView(sub), secret: sub.secret });
+  const endpoint = deps.endpoints.add(input);
+  send(res, 201, { ...publicView(endpoint), secret: endpoint.secret });
 }
 
-function deleteSubscription({ res, deps }: Ctx, [id = '']: string[]): void {
-  const removed = deps.subscriptions.remove(id);
-  send(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'subscription not found' });
+function deleteEndpoint({ res, deps }: Ctx, [id = '']: string[]): void {
+  const removed = deps.endpoints.remove(id);
+  send(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'endpoint not found' });
 }
 
 async function postEvent({ req, res, deps }: Ctx): Promise<void> {
@@ -59,28 +93,36 @@ async function postEvent({ req, res, deps }: Ctx): Promise<void> {
   if (typeof event !== 'string' || event === '') {
     return send(res, 400, { error: 'event must be a non-empty string' });
   }
-  const deliveries = await Promise.all(
-    deps.subscriptions
-      .forEvent(event)
-      .map((sub) =>
-        deliver(sub, event, payload, { fetch: deps.fetch, timeoutMs: deps.config.deliveryTimeoutMs }),
-      ),
-  );
-  send(res, 202, {
-    deliveries: deliveries.map(({ id, subscriptionId, status, attempts }) => ({
-      id,
-      subscriptionId,
-      status,
-      attempts,
-    })),
+  const deliveries = deps.endpoints.forEvent(event).map((endpoint) => {
+    const delivery = createDelivery(endpoint, event, payload);
+    dispatch(endpoint, delivery, deps);
+    return delivery;
   });
+  send(res, 202, { deliveries: deliveries.map(deliveryView) });
+}
+
+function listDeadLetters({ res, deps }: Ctx): void {
+  send(res, 200, { deadLetters: deps.deadLetters.list().map(deadLetterView) });
+}
+
+function replayDeadLetter({ res, deps }: Ctx, [id = '']: string[]): void {
+  const letter = deps.deadLetters.get(id);
+  if (!letter) return send(res, 404, { error: 'dead letter not found' });
+  const endpoint = deps.endpoints.get(letter.endpointId);
+  if (!endpoint) return send(res, 409, { error: 'endpoint no longer exists' });
+  deps.deadLetters.remove(id);
+  const delivery = createDelivery(endpoint, letter.event, letter.payload);
+  dispatch(endpoint, delivery, deps);
+  send(res, 202, { delivery: deliveryView(delivery) });
 }
 
 const routes: [method: string, pattern: RegExp, handler: Handler][] = [
-  ['GET', /^\/subscriptions$/, listSubscriptions],
-  ['POST', /^\/subscriptions$/, createSubscription],
-  ['DELETE', /^\/subscriptions\/([\w-]+)$/, deleteSubscription],
+  ['GET', /^\/endpoints$/, listEndpoints],
+  ['POST', /^\/endpoints$/, createEndpoint],
+  ['DELETE', /^\/endpoints\/([\w-]+)$/, deleteEndpoint],
   ['POST', /^\/events$/, postEvent],
+  ['GET', /^\/dead-letters$/, listDeadLetters],
+  ['POST', /^\/dead-letters\/([\w-]+)\/replay$/, replayDeadLetter],
 ];
 
 async function route(req: IncomingMessage, res: ServerResponse, deps: Deps): Promise<void> {
